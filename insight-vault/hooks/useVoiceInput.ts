@@ -49,6 +49,11 @@ export function useVoiceInput({
   const [interimText, setInterimText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  // Track whether we *want* to be listening (vs browser auto-stopping)
+  const wantListeningRef = useRef(false);
+  // Prevent infinite restart loops
+  const restartCountRef = useRef(0);
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Check browser support
   useEffect(() => {
@@ -60,6 +65,12 @@ export function useVoiceInput({
   }, []);
 
   const stop = useCallback(() => {
+    wantListeningRef.current = false;
+    restartCountRef.current = 0;
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
     if (recognitionRef.current) {
       recognitionRef.current.stop();
       recognitionRef.current = null;
@@ -82,6 +93,9 @@ export function useVoiceInput({
       recognitionRef.current.abort();
     }
 
+    wantListeningRef.current = true;
+    restartCountRef.current = 0;
+
     const recognition = new SR();
     recognition.continuous = continuous;
     recognition.interimResults = true;
@@ -91,6 +105,7 @@ export function useVoiceInput({
     recognition.onstart = () => {
       setListening(true);
       setError(null);
+      restartCountRef.current = 0;
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
@@ -115,22 +130,76 @@ export function useVoiceInput({
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      if (event.error === "aborted" || event.error === "no-speech") return;
-      setError(
-        event.error === "not-allowed"
-          ? "Microphone access denied. Please allow microphone permissions."
-          : `Speech error: ${event.error}`
-      );
+      // "no-speech" — browser timed out waiting for audio; we auto-restart
+      if (event.error === "no-speech" || event.error === "aborted") {
+        return;
+      }
+
+      // Fatal errors — stop and show message
+      wantListeningRef.current = false;
+      if (event.error === "not-allowed") {
+        setError("Microphone access denied. Please allow microphone permissions.");
+      } else if (event.error === "network") {
+        setError("Network error — speech service unavailable. Try again.");
+      } else if (event.error === "service-not-allowed") {
+        setError("Speech service not available. Try a Chromium-based browser.");
+      } else if (event.error === "audio-capture") {
+        setError("No microphone found. Please connect a microphone.");
+      } else {
+        setError(`Speech error: ${event.error}`);
+      }
       setListening(false);
     };
 
     recognition.onend = () => {
-      setListening(false);
-      setInterimText("");
       recognitionRef.current = null;
+      setInterimText("");
+
+      // Auto-restart if user hasn't pressed stop
+      // (browser kills recognition after silence or no-speech timeout)
+      if (wantListeningRef.current) {
+        restartCountRef.current += 1;
+
+        // Safety: give up after 5 consecutive restarts with no speech
+        if (restartCountRef.current > 5) {
+          wantListeningRef.current = false;
+          setListening(false);
+          setError("No speech detected. Tap the mic to try again.");
+          return;
+        }
+
+        // Brief delay before restarting to avoid rapid-fire
+        restartTimerRef.current = setTimeout(() => {
+          if (!wantListeningRef.current) return;
+          try {
+            const newRecognition = new SR();
+            newRecognition.continuous = continuous;
+            newRecognition.interimResults = true;
+            newRecognition.lang = lang;
+            newRecognition.onstart = recognition.onstart;
+            newRecognition.onresult = recognition.onresult;
+            newRecognition.onerror = recognition.onerror;
+            newRecognition.onend = recognition.onend;
+            recognitionRef.current = newRecognition;
+            newRecognition.start();
+          } catch {
+            wantListeningRef.current = false;
+            setListening(false);
+            setError("Could not restart speech recognition. Tap the mic to try again.");
+          }
+        }, 300);
+        return;
+      }
+
+      setListening(false);
     };
 
-    recognition.start();
+    try {
+      recognition.start();
+    } catch {
+      setError("Could not start speech recognition. Is another app using the microphone?");
+      wantListeningRef.current = false;
+    }
   }, [continuous, lang, onTranscript]);
 
   const toggle = useCallback(() => {
@@ -144,6 +213,10 @@ export function useVoiceInput({
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      wantListeningRef.current = false;
+      if (restartTimerRef.current) {
+        clearTimeout(restartTimerRef.current);
+      }
       if (recognitionRef.current) {
         recognitionRef.current.abort();
       }
