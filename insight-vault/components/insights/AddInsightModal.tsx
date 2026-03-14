@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Plus, Sparkles, Loader2 } from "lucide-react";
 import {
   Dialog,
@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { type InsightType } from "@/db/schema";
 import { useToast } from "@/components/ui/toast";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { VoiceMicButton } from "@/components/ui/VoiceMicButton";
 
 const TYPES: { value: InsightType; label: string }[] = [
   { value: "note",           label: "Note" },
@@ -45,6 +47,15 @@ export function AddInsightModal({ onAdd, saving, aiReady }: AddInsightModalProps
   const [type, setType] = useState<InsightType>("note");
   const [source, setSource] = useState("");
   const { toast } = useToast();
+
+  const handleVoiceTranscript = useCallback((text: string) => {
+    setContent((prev) => {
+      const separator = prev && !prev.endsWith(" ") ? " " : "";
+      return prev + separator + text;
+    });
+  }, []);
+
+  const voice = useVoiceInput({ onTranscript: handleVoiceTranscript });
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -123,15 +134,33 @@ export function AddInsightModal({ onAdd, saving, aiReady }: AddInsightModalProps
 
           {/* Content */}
           <div className="space-y-1.5">
-            <Label htmlFor="content">Content *</Label>
-            <Textarea
-              id="content"
-              placeholder="Enter your insight, quote, or idea…"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="min-h-[120px]"
-              required
-            />
+            <div className="flex items-center justify-between">
+              <Label htmlFor="content">Content *</Label>
+              <VoiceMicButton
+                listening={voice.listening}
+                supported={voice.supported}
+                onClick={voice.toggle}
+                size="sm"
+              />
+            </div>
+            <div className="relative">
+              <Textarea
+                id="content"
+                placeholder={voice.listening ? "Listening… speak now" : "Enter your insight, quote, or idea…"}
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                className="min-h-[120px]"
+                required
+              />
+              {voice.interimText && (
+                <p className="text-xs text-muted-foreground italic mt-1 px-1">
+                  {voice.interimText}…
+                </p>
+              )}
+            </div>
+            {voice.error && (
+              <p className="text-xs text-destructive">{voice.error}</p>
+            )}
           </div>
 
           {/* Source */}

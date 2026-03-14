@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Send,
   Loader2,
@@ -13,6 +13,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Markdown } from "@/components/ui/markdown";
 import { type ChatMessage } from "@/db/schema";
 import { cn } from "@/lib/utils";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { VoiceMicButton } from "@/components/ui/VoiceMicButton";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -35,6 +37,15 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const handleVoiceTranscript = useCallback((text: string) => {
+    setInput((prev) => {
+      const separator = prev && !prev.endsWith(" ") ? " " : "";
+      return prev + separator + text;
+    });
+  }, []);
+
+  const voice = useVoiceInput({ onTranscript: handleVoiceTranscript });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -169,19 +180,33 @@ export function ChatPanel({
           </p>
         )}
         <div className="flex gap-2 items-end">
-          <Textarea
-            placeholder={
-              aiReady
-                ? "Ask a question about your notes… (Enter to send)"
-                : "AI not configured"
-            }
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={!aiReady || streaming}
-            className="min-h-[44px] max-h-[120px] resize-none text-sm"
-            rows={1}
-            aria-label="Chat message input"
+          <div className="flex-1 relative">
+            <Textarea
+              placeholder={
+                voice.listening
+                  ? "Listening… speak now"
+                  : aiReady
+                    ? "Ask a question about your notes… (Enter to send)"
+                    : "AI not configured"
+              }
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={!aiReady || streaming}
+              className="min-h-[44px] max-h-[120px] resize-none text-sm"
+              rows={1}
+              aria-label="Chat message input"
+            />
+            {voice.interimText && (
+              <p className="text-[10px] text-muted-foreground italic mt-0.5 px-1 truncate">
+                {voice.interimText}…
+              </p>
+            )}
+          </div>
+          <VoiceMicButton
+            listening={voice.listening}
+            supported={voice.supported}
+            onClick={voice.toggle}
           />
           <Button
             size="icon"
@@ -197,6 +222,9 @@ export function ChatPanel({
             )}
           </Button>
         </div>
+        {voice.error && (
+          <p className="text-xs text-destructive mt-1">{voice.error}</p>
+        )}
       </div>
     </div>
   );
